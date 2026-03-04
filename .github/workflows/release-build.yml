@@ -11,12 +11,8 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.platform }}
+    name: Build x64
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [Win32, x64]
 
     steps:
       - name: Checkout
@@ -25,20 +21,19 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build (Release/${{ matrix.platform }})
+      - name: Build (Release/x64)
         shell: pwsh
         run: |
           msbuild FastCopy.sln `
             /m `
             /p:Configuration=Release `
-            /p:Platform=${{ matrix.platform }} `
-            /p:PlatformToolset=v143
+            /p:Platform=x64
 
       - name: Package binaries
         shell: pwsh
         run: |
-          $platform = "${{ matrix.platform }}"
-          $outDir = if ($platform -eq "Win32") { "Release" } else { "x64\Release" }
+          $platform = "x64"
+          $outDir = "x64\Release"
           if (!(Test-Path $outDir)) {
             throw "Build output directory not found: $outDir"
           }
@@ -50,8 +45,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FastCopy-${{ matrix.platform }}-Release
-          path: FastCopy-${{ matrix.platform }}-Release.zip
+          name: FastCopy-x64-Release
+          path: FastCopy-x64-Release.zip
           if-no-files-found: error
 
   release:
@@ -70,5 +65,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/FastCopy-Win32-Release/FastCopy-Win32-Release.zip
             artifacts/FastCopy-x64-Release/FastCopy-x64-Release.zip
