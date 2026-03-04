@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     name: Build x64
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
@@ -21,7 +21,26 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build (Release/x64)
+      # xxhash → TLib → FastCopy の順に依存関係を解決してビルド
+      - name: Build xxhash (Release/x64)
+        shell: pwsh
+        run: |
+          msbuild external\xxhash\xxhash.vcxproj `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:WindowsTargetPlatformVersion=10.0
+
+      - name: Build TLib (Release/x64)
+        shell: pwsh
+        run: |
+          msbuild src\TLib\TLib.vcxproj `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:WindowsTargetPlatformVersion=10.0
+
+      - name: Build FastCopy (Release/x64)
         shell: pwsh
         run: |
           msbuild FastCopy.vcxproj `
