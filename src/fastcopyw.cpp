@@ -18,11 +18,57 @@
 
 using namespace std;
 
+/* ========================================================================
+	NAS (Synology 等) 互換ファイル名変換
+	共有フォルダ命名規則:
+	 - 禁止文字: ! " # % & ' ( ) * + , / : ; < = > ? @ [ ] \ ^ ` { } | ~
+	 - 制御文字 (< 0x20) および DEL (0x7F)
+	 - 先頭文字に - (マイナス) またはスペース不可
+	 - 末尾文字にスペース不可 (既存: 末尾 '.' / ' ' 除去)
+	 - 予約名: . .. global lost+found home printers usbbackup
+	 - Windows 予約名: CON PRN AUX NUL COM1-9 LPT1-9
+	 - 名前長上限: 32 文字 (共有フォルダ), 一般ファイルは MAX_PATH に委ねる
+	======================================================================== */
+
 static BOOL IsNasUnsafeChar(WCHAR ch)
 {
-	return	(ch < 0x20) || ch == L'\"' || ch == L'*' || ch == L'/' || ch == L':' ||
-			ch == L'<' || ch == L'>' || ch == L'?' || ch == L'\\' || ch == L'|' ||
-			ch == 0x7f;
+	if (ch < 0x20 || ch == 0x7f) return TRUE;
+
+	// Synology 共有フォルダ禁止文字 完全セット
+	static const WCHAR forbidden[] = L"!\"#%&'()*+,/:;<=>?@[\\]^`{|}~";
+	for (const WCHAR *p = forbidden; *p; p++) {
+		if (ch == *p) return TRUE;
+	}
+	return FALSE;
+}
+
+// NAS 予約名チェック (大文字小文字不問)
+static BOOL IsNasReservedName(const WCHAR *name)
+{
+	// Synology 予約名
+	static const WCHAR *nas_reserved[] = {
+		L".", L"..", L"global", L"lost+found", L"home", L"printers", L"usbbackup", 0
+	};
+	for (int i = 0; nas_reserved[i]; i++) {
+		if (wcsicmp(name, nas_reserved[i]) == 0) return TRUE;
+	}
+	// Windows 予約名 (拡張子なしステムで判定)
+	static const WCHAR *win_reserved[] = {
+		L"CON", L"PRN", L"AUX", L"NUL",
+		L"COM1", L"COM2", L"COM3", L"COM4", L"COM5", L"COM6", L"COM7", L"COM8", L"COM9",
+		L"LPT1", L"LPT2", L"LPT3", L"LPT4", L"LPT5", L"LPT6", L"LPT7", L"LPT8", L"LPT9", 0
+	};
+	WCHAR stem[MAX_PATH] = {};
+	const WCHAR *dot = wcschr(name, L'.');
+	int stem_len = dot ? (int)(dot - name) : (int)wcslen(name);
+	if (stem_len > 0 && stem_len < _countof(stem)) {
+		memcpy(stem, name, stem_len * sizeof(WCHAR));
+		stem[stem_len] = 0;
+		for (int i = 0; win_reserved[i]; i++) {
+			if (wcsicmp(stem, win_reserved[i]) == 0) return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 static int MakeNasCompatBaseName(const WCHAR *src, WCHAR *dst, int max_dst, BOOL is_dir)
@@ -30,41 +76,38 @@ static int MakeNasCompatBaseName(const WCHAR *src, WCHAR *dst, int max_dst, BOOL
 	int pos = 0;
 
 	if (max_dst <= 0) return 0;
+
 	for (; *src && pos < max_dst - 1; src++) {
 		WCHAR ch = IsNasUnsafeChar(*src) ? L'_' : *src;
 		dst[pos++] = ch;
 	}
 	dst[pos] = 0;
 
+	// 末尾の '.' と ' ' を除去
 	while (pos > 0 && (dst[pos - 1] == L'.' || dst[pos - 1] == L' ')) {
 		dst[--pos] = 0;
 	}
 
+	// 先頭が '-' またはスペースの場合 '_' に置換
+	if (pos > 0 && (dst[0] == L'-' || dst[0] == L' ')) {
+		dst[0] = L'_';
+	}
+
+	// 全除去された場合のフォールバック
 	if (pos == 0) {
 		dst[pos++] = L'_';
 		dst[pos] = 0;
 	}
 
-	if (!is_dir) {
-		const WCHAR *reserved[] = { L"CON", L"PRN", L"AUX", L"NUL",
-			L"COM1", L"COM2", L"COM3", L"COM4", L"COM5", L"COM6", L"COM7", L"COM8", L"COM9",
-			L"LPT1", L"LPT2", L"LPT3", L"LPT4", L"LPT5", L"LPT6", L"LPT7", L"LPT8", L"LPT9", 0 };
-		WCHAR stem[MAX_PATH] = {};
-		WCHAR *dot = wcschr(dst, L'.');
-		int stem_len = dot ? (int)(dot - dst) : (int)wcslen(dst);
-		if (stem_len > 0 && stem_len < _countof(stem)) {
-			memcpy(stem, dst, stem_len * sizeof(WCHAR));
-			stem[stem_len] = 0;
-			for (int i=0; reserved[i]; i++) {
-				if (wcsicmp(stem, reserved[i]) == 0 && pos < max_dst - 1) {
-					memmove(dst + 1, dst, (wcslen(dst) + 1) * sizeof(WCHAR));
-					dst[0] = L'_';
-					pos++;
-					break;
-				}
-			}
+	// 予約名チェック (NAS + Windows)
+	if (IsNasReservedName(dst)) {
+		if (pos < max_dst - 1) {
+			memmove(dst + 1, dst, (wcslen(dst) + 1) * sizeof(WCHAR));
+			dst[0] = L'_';
+			pos++;
 		}
 	}
+
 	return	pos;
 }
 
