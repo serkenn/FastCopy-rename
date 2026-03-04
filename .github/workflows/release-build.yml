@@ -27,7 +27,8 @@ jobs:
           msbuild FastCopy.sln `
             /m `
             /p:Configuration=Release `
-            /p:Platform=x64
+            /p:Platform=x64 `
+            /p:WindowsTargetPlatformVersion=10.0
 
       - name: Package binaries
         shell: pwsh
