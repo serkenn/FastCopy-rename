@@ -527,7 +527,7 @@ BOOL FastCopy::ApplyNasCompatName(int dir_len, BOOL is_dir)
 	}
 
 	WCHAR *leaf = dst + dir_len;
-	if (!*leaf || *leaf == L':') { // ADS や空文字は対象外
+	if (!*leaf || *leaf == L':') { // Skip ADS/empty name
 		return FALSE;
 	}
 
@@ -561,7 +561,7 @@ BOOL FastCopy::ApplyNasCompatName(int dir_len, BOOL is_dir)
 
 	if (changed) {
 		WCHAR msg_buf[MAX_PATH_EX];
-		swprintf(msg_buf, L"NAS名互換変換: %s -> %s", org_name, leaf);
+		swprintf(msg_buf, L"NAS name normalized: %s -> %s", org_name, leaf);
 		WriteErrLog(msg_buf);
 		if (isListing) {
 			PutList(msg_buf, PL_ERRMSG);
