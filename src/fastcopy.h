@@ -873,6 +873,7 @@ protected:
 	BOOL WriteProc(int dir_len);
 	BOOL CaseAlignProc(int dir_len=-1, BOOL need_log=FALSE);
 	BOOL WriteDirProc(int dir_len);
+	BOOL ApplyNasCompatName(int dir_len, BOOL is_dir);
 	BOOL SetDirExtData(FileStat *stat);
 	DigestCalc *GetDigestCalc(DigestObj *obj, DWORD require_size);
 	BOOL PutDigestCalc(DigestCalc *obj, DigestCalc::Status status);

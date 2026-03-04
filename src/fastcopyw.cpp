@@ -18,6 +18,89 @@
 
 using namespace std;
 
+static BOOL IsNasUnsafeChar(WCHAR ch)
+{
+	return	(ch < 0x20) || ch == L'\"' || ch == L'*' || ch == L'/' || ch == L':' ||
+			ch == L'<' || ch == L'>' || ch == L'?' || ch == L'\\' || ch == L'|' ||
+			ch == 0x7f;
+}
+
+static int MakeNasCompatBaseName(const WCHAR *src, WCHAR *dst, int max_dst, BOOL is_dir)
+{
+	int pos = 0;
+
+	if (max_dst <= 0) return 0;
+	for (; *src && pos < max_dst - 1; src++) {
+		WCHAR ch = IsNasUnsafeChar(*src) ? L'_' : *src;
+		dst[pos++] = ch;
+	}
+	dst[pos] = 0;
+
+	while (pos > 0 && (dst[pos - 1] == L'.' || dst[pos - 1] == L' ')) {
+		dst[--pos] = 0;
+	}
+
+	if (pos == 0) {
+		dst[pos++] = L'_';
+		dst[pos] = 0;
+	}
+
+	if (!is_dir) {
+		const WCHAR *reserved[] = { L"CON", L"PRN", L"AUX", L"NUL",
+			L"COM1", L"COM2", L"COM3", L"COM4", L"COM5", L"COM6", L"COM7", L"COM8", L"COM9",
+			L"LPT1", L"LPT2", L"LPT3", L"LPT4", L"LPT5", L"LPT6", L"LPT7", L"LPT8", L"LPT9", 0 };
+		WCHAR stem[MAX_PATH] = {};
+		WCHAR *dot = wcschr(dst, L'.');
+		int stem_len = dot ? (int)(dot - dst) : (int)wcslen(dst);
+		if (stem_len > 0 && stem_len < _countof(stem)) {
+			memcpy(stem, dst, stem_len * sizeof(WCHAR));
+			stem[stem_len] = 0;
+			for (int i=0; reserved[i]; i++) {
+				if (wcsicmp(stem, reserved[i]) == 0 && pos < max_dst - 1) {
+					memmove(dst + 1, dst, (wcslen(dst) + 1) * sizeof(WCHAR));
+					dst[0] = L'_';
+					pos++;
+					break;
+				}
+			}
+		}
+	}
+	return	pos;
+}
+
+static int MakeNasCompatCollisionName(const WCHAR *base_name, int seq, BOOL is_dir,
+									WCHAR *dst, int max_dst)
+{
+	WCHAR suffix[32];
+	int suffix_len = swprintf(suffix, L"_%d", seq);
+	const WCHAR *ext = NULL;
+	int base_len = (int)wcslen(base_name);
+
+	if (!is_dir) {
+		const WCHAR *dot = wcsrchr(base_name, L'.');
+		if (dot && dot != base_name) {
+			ext = dot;
+			base_len = (int)(dot - base_name);
+		}
+	}
+	if (suffix_len <= 0 || max_dst <= 1) return 0;
+	if (base_len + suffix_len + (ext ? (int)wcslen(ext) : 0) >= max_dst) {
+		base_len = max_dst - suffix_len - (ext ? (int)wcslen(ext) : 0) - 1;
+	}
+	if (base_len <= 0) return 0;
+
+	memcpy(dst, base_name, base_len * sizeof(WCHAR));
+	memcpy(dst + base_len, suffix, suffix_len * sizeof(WCHAR));
+	int pos = base_len + suffix_len;
+	if (ext) {
+		int ext_len = (int)wcslen(ext);
+		memcpy(dst + pos, ext, ext_len * sizeof(WCHAR));
+		pos += ext_len;
+	}
+	dst[pos] = 0;
+	return	pos;
+}
+
 /*=========================================================================
   関  数 ： WriteThread
   概  要 ： Write 処理
@@ -117,6 +200,9 @@ BOOL FastCopy::WriteProc(int dir_len)
 			else
 				new_dst_len = dir_len + MakeRenameName(dst + dir_len,
 										writeReq->stat.renameCount, writeReq->stat.cFileName);
+			if (ApplyNasCompatName(dir_len, FALSE)) {
+				new_dst_len = dir_len + (int)wcslen(dst + dir_len);
+			}
 
 			if (!isExec) {
 				if (writeReq->cmd == CREATE_HARDLINK) {
@@ -206,6 +292,9 @@ BOOL FastCopy::WriteDirProc(int dir_len)
 	else
 		new_dir_len = dir_len + MakeRenameName(dst + dir_len,
 								writeReq->stat.renameCount, writeReq->stat.cFileName, TRUE);
+	if (ApplyNasCompatName(dir_len, TRUE)) {
+		new_dir_len = dir_len + (int)wcslen(dst + dir_len);
+	}
 
 	if (buf_size) {
 		if (dstDirExtBuf.RemainSize() < buf_size
@@ -429,6 +518,56 @@ BOOL FastCopy::RestoreHardLinkInfo(DWORD *link_data, WCHAR *path, int base_len)
 	}
 
 	return	TRUE;
+}
+
+BOOL FastCopy::ApplyNasCompatName(int dir_len, BOOL is_dir)
+{
+	if (!IsNetFs(dstFsType) || dir_len < 0) {
+		return FALSE;
+	}
+
+	WCHAR *leaf = dst + dir_len;
+	if (!*leaf || *leaf == L':') { // ADS や空文字は対象外
+		return FALSE;
+	}
+
+	WCHAR org_name[MAX_PATH];
+	WCHAR base_name[MAX_PATH];
+	WCHAR new_name[MAX_PATH];
+
+	wcscpyz(org_name, leaf);
+	MakeNasCompatBaseName(org_name, base_name, _countof(base_name), is_dir);
+	wcscpyz(new_name, base_name);
+
+	BOOL changed = wcscmp(org_name, new_name) != 0;
+	if (changed) {
+		wcscpyz(leaf, new_name);
+	}
+
+	if (changed) {
+		DWORD attr = ::GetFileAttributesW(dst);
+		BOOL is_existing_dir = (attr != 0xffffffff) && (attr & FILE_ATTRIBUTE_DIRECTORY);
+
+		if (!(is_dir && is_existing_dir)) {
+			for (int i=1; attr != 0xffffffff && i <= 9999; i++) {
+				if (!MakeNasCompatCollisionName(base_name, i, is_dir, new_name, _countof(new_name))) {
+					break;
+				}
+				wcscpyz(leaf, new_name);
+				attr = ::GetFileAttributesW(dst);
+			}
+		}
+	}
+
+	if (changed) {
+		WCHAR msg_buf[MAX_PATH_EX];
+		swprintf(msg_buf, L"NAS名互換変換: %s -> %s", org_name, leaf);
+		WriteErrLog(msg_buf);
+		if (isListing) {
+			PutList(msg_buf, PL_ERRMSG);
+		}
+	}
+	return changed;
 }
 
 BOOL FastCopy::WriteDigestProc(int dst_len, FileStat *stat, DigestObj::Status status)
