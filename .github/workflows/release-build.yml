@@ -24,7 +24,7 @@ jobs:
       - name: Build (Release/x64)
         shell: pwsh
         run: |
-          msbuild FastCopy.sln `
+          msbuild FastCopy.vcxproj `
             /m `
             /p:Configuration=Release `
             /p:Platform=x64 `
