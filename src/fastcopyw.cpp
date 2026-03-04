@@ -71,6 +71,76 @@ static BOOL IsNasReservedName(const WCHAR *name)
 	return FALSE;
 }
 
+// NAS (ext4/btrfs) ファイル名コンポーネントの UTF-8 バイト上限
+#define NAS_MAX_FILENAME_UTF8_BYTES  255
+
+// UTF-8 エンコード時のバイト数を算出
+static int CalcUtf8ByteLen(const WCHAR *str, int wchar_len)
+{
+	if (!str || wchar_len == 0) return 0;
+	int ret = ::WideCharToMultiByte(CP_UTF8, 0, str, wchar_len, NULL, 0, NULL, NULL);
+	return (ret > 0) ? ret : 0;
+}
+
+// WCHAR ファイル名を NAS の UTF-8 バイト上限に切り詰め
+// 拡張子を保持し、サロゲートペアを分断しない
+static int TruncateToNasUtf8Limit(WCHAR *name, int max_utf8_bytes, BOOL is_dir)
+{
+	int name_len = (int)wcslen(name);
+	if (name_len == 0) return 0;
+	if (CalcUtf8ByteLen(name, name_len) <= max_utf8_bytes) return name_len;
+
+	// ファイルの場合、拡張子を分離して保持
+	WCHAR ext_buf[64] = {};
+	int ext_wlen = 0;
+	int ext_bytes = 0;
+	int stem_len = name_len;
+
+	if (!is_dir) {
+		const WCHAR *dot = wcsrchr(name, L'.');
+		if (dot && dot != name) {
+			ext_wlen = (int)(name + name_len - dot);
+			if (ext_wlen < (int)_countof(ext_buf)) {
+				memcpy(ext_buf, dot, ext_wlen * sizeof(WCHAR));
+				ext_buf[ext_wlen] = 0;
+				ext_bytes = CalcUtf8ByteLen(ext_buf, ext_wlen);
+				stem_len = (int)(dot - name);
+			}
+		}
+	}
+
+	int avail = max_utf8_bytes - ext_bytes;
+	if (avail < 3) avail = 3; // 最低 1 CJK 文字分
+
+	// ステム部を右から縮小して UTF-8 バイト上限に収める
+	while (stem_len > 0 && CalcUtf8ByteLen(name, stem_len) > avail) {
+		stem_len--;
+		// high surrogate (U+D800-DBFF) で切断しない
+		if (stem_len > 0 && name[stem_len - 1] >= 0xD800 && name[stem_len - 1] <= 0xDBFF) {
+			stem_len--;
+		}
+	}
+
+	// 切り詰め後の末尾 '.' や ' ' を除去
+	while (stem_len > 0 && (name[stem_len - 1] == L'.' || name[stem_len - 1] == L' ')) {
+		stem_len--;
+	}
+
+	if (stem_len <= 0) {
+		name[0] = L'_';
+		stem_len = 1;
+	}
+
+	// 拡張子を再結合
+	if (ext_wlen > 0) {
+		memmove(name + stem_len, ext_buf, ext_wlen * sizeof(WCHAR));
+	}
+	name_len = stem_len + ext_wlen;
+	name[name_len] = 0;
+
+	return name_len;
+}
+
 static int MakeNasCompatBaseName(const WCHAR *src, WCHAR *dst, int max_dst, BOOL is_dir)
 {
 	int pos = 0;
@@ -580,6 +650,9 @@ BOOL FastCopy::ApplyNasCompatName(int dir_len, BOOL is_dir)
 
 	wcscpyz(org_name, leaf);
 	MakeNasCompatBaseName(org_name, base_name, _countof(base_name), is_dir);
+	// NAS ファイルシステム (ext4/btrfs) の UTF-8 バイト上限に切り詰め
+	// 衝突サフィックス (_NNNN) 用に 10 バイト分のマージンを確保
+	TruncateToNasUtf8Limit(base_name, NAS_MAX_FILENAME_UTF8_BYTES - 10, is_dir);
 	wcscpyz(new_name, base_name);
 
 	BOOL changed = wcscmp(org_name, new_name) != 0;
@@ -596,6 +669,7 @@ BOOL FastCopy::ApplyNasCompatName(int dir_len, BOOL is_dir)
 				if (!MakeNasCompatCollisionName(base_name, i, is_dir, new_name, _countof(new_name))) {
 					break;
 				}
+				TruncateToNasUtf8Limit(new_name, NAS_MAX_FILENAME_UTF8_BYTES, is_dir);
 				wcscpyz(leaf, new_name);
 				attr = ::GetFileAttributesW(dst);
 			}
