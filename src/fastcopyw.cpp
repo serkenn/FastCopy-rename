@@ -677,8 +677,12 @@ BOOL FastCopy::ApplyNasCompatName(int dir_len, BOOL is_dir)
 	}
 
 	if (changed) {
+		int org_utf8  = CalcUtf8ByteLen(org_name, (int)wcslen(org_name));
+		int new_utf8  = CalcUtf8ByteLen(leaf, (int)wcslen(leaf));
 		WCHAR msg_buf[MAX_PATH_EX];
-		swprintf(msg_buf, L"NAS name normalized: %s -> %s", org_name, leaf);
+		swprintf(msg_buf,
+			L"NAS name normalized (%d->%d UTF8bytes): %s -> %s",
+			org_utf8, new_utf8, org_name, leaf);
 		WriteErrLog(msg_buf);
 		if (isListing) {
 			PutList(msg_buf, PL_ERRMSG);
